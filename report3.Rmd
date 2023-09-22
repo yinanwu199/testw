@@ -59,7 +59,7 @@ cdf_ft4 <- as.data.frame(Hmisc::Ecdf(dat.f$FT4.Pmol.L)) %>%
   rename(FT4.Pmol.L = x,
          cdf.FT4 = y) %>%
   mutate(FT4.Pmol.L = as.character(FT4.Pmol.L))
-
+# this code need to be tested!
 cdf_tsh <- as.data.frame(Hmisc::Ecdf(dat.f$TSH)) %>% 
   filter(y != 0) %>%
   rename(TSH = x,
