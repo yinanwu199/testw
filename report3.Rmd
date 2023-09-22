@@ -1,0 +1,1342 @@
+---
+title: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, 
+                      message = F, 
+                      warning = F
+                      )
+library(openxlsx)
+library(gtsummary)
+library(dplyr)
+library(segmented)
+library(lmtest)
+
+summary.seg <- function(x) {
+  dat <- bind_cols(exp(slope(x)[[1]]),summary(x)$coefficients[2:1,4])
+  names(dat)[6] <- "p.value"
+  return(dat)
+}
+
+dat <- read.xlsx("C:\\Users\\yinan\\Desktop\\R Work#\\RE08319822-Y\\finaldata5.xlsx")
+
+# sex data
+sex <- read.xlsx("C:\\Users\\yinan\\Desktop\\R Work#\\RE08319822-Y\\sex.xlsx")
+sex.sub <- sex[,c(1,3)]
+names(dat)[1] <- "id"
+names(sex.sub) <- c("id", "sex")
+sex.sub$sex  <- case_when(sex.sub$sex == "男" ~ 1,
+                          sex.sub$sex == "女" ~ 0,
+                          sex.sub$sex == "2" ~ 0,
+                          sex.sub$sex == "1" ~ 1) 
+
+table(sex.sub$sex)
+# merge
+dat.f <- left_join(dat, sex.sub)
+
+# 促甲狀腺激素 TSH
+dat.f <- dat.f %>%
+            mutate(FT3.Pmol.L = 1.54 * `FT3（pg/ml）`,
+                   FT4.Pmol.L = 1.3 * `FT4(ng/dl)` * 10, # ng/dl to pg/ml
+                   TT4RI_x = FT4.Pmol.L * TSH,
+                   TSHI_x = log(TSH) + 0.1345 *FT4.Pmol.L,
+                   PTFQI_x = pnorm(FT4.Pmol.L, mean = 10.075, sd = 2.155) +
+                   pnorm(log(TSH), mean = 0.4654, sd = 0.7744) - 1)
+
+
+dat.f$FT4.Pmol.L <- as.numeric(dat.f$FT4.Pmol.L)
+dat.f$FT3.Pmol.L <- as.numeric(dat.f$FT3.Pmol.L)
+
+cdf_ft4 <- as.data.frame(Hmisc::Ecdf(dat.f$FT4.Pmol.L)) %>% 
+  filter(y != 0) %>%
+  rename(FT4.Pmol.L = x,
+         cdf.FT4 = y) %>%
+  mutate(FT4.Pmol.L = as.character(FT4.Pmol.L))
+
+cdf_tsh <- as.data.frame(Hmisc::Ecdf(dat.f$TSH)) %>% 
+  filter(y != 0) %>%
+  rename(TSH = x,
+         cdf.tsh = y)%>%
+  mutate(TSH = as.character(TSH))
+
+cdf_ft3 <- as.data.frame(Hmisc::Ecdf(dat.f$FT3.Pmol.L)) %>% 
+  filter(y != 0) %>%
+  rename(FT3.Pmol.L = x,
+         cdf.FT3 = y) %>%
+  mutate(FT3.Pmol.L = as.character(FT3.Pmol.L))
+
+dat.f1 <- merge(dat.f, cdf_ft3, all.x = T , by = "FT3.Pmol.L")
+dat.f2 <- merge(dat.f1, cdf_ft4, all.x = T)
+dat.f3 <- merge(dat.f2, cdf_tsh, all.x = T)
+
+
+dat.f4 <- dat.f3 %>%
+          mutate(
+                TFQI3_x= cdf.FT3 - (1- cdf.tsh),
+                TFQI4_x = cdf.FT4 - (1- cdf.tsh))
+
+# change names
+#names(dat.f4)[6:8] <- c("DR", "DNP", "DKD")
+#names(dat.f4)[23:24] <- c("Duration_of_Diabetes", "HbA1c")
+
+```
+
+
+
+```{r fig.asp = 0.7, fig.width = 5}
+# descriptive DR
+dat.f4 %>% 
+  dplyr::select(DR, Age, sex, TG, LDL, BMI, HbA1c, FT4.Pmol.L, FT3.Pmol.L) %>%
+  tbl_summary(by = "DR") %>%
+  add_p()
+
+# descriptive DR
+dat.f4 %>% 
+  dplyr::select(DNP, Age, sex, TG, LDL, BMI, HbA1c, FT4.Pmol.L, FT3.Pmol.L) %>%
+  tbl_summary(by = "DNP") %>%
+  add_p()
+
+# descriptive DR
+dat.f4 %>% 
+  dplyr::select(DKD, Age, sex, TG, LDL, BMI, HbA1c, FT4.Pmol.L, FT3.Pmol.L) %>%
+  tbl_summary(by = "DKD") %>%
+  add_p()             
+
+```
+
+
+
+```{r fig.asp = 0.7, fig.width = 5}
+# Associations Between Sensitivity to TH Indices and DR
+require(gam)
+#library(mgcv)
+         
+logitgam1.1<-gam::gam(DR ~ s(TFQI3_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam1.1, se=T, ylab = "DR", xlab = "TFQI3", col='red')
+
+logitgam1.2<-gam::gam(DR ~ s(TFQI4_x, df = 3) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam1.2, se=T, ylab = "DR", xlab = "TFQI4", col='red')
+
+logitgam1.3<-gam::gam(DR ~ s(TT4RI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam1.3, se=T, ylab = "DR", xlab = "TT4RI", col='red')
+
+logitgam1.4<-gam::gam(DR ~ s(PTFQI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam1.4, se=T, ylab = "DR", xlab = "PTFQI", col='red')
+```
+
+
+```{r fig.asp = 0.7, fig.width = 5}
+logitgam2.1<-gam::gam(DNP ~ s(TFQI3_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam2.1, se=T, ylab = "DNP", xlab = "TFQI3", col='red')
+
+logitgam2.2<-gam::gam(DNP ~ s(TFQI4_x, df = 3) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam2.2, se=T, ylab = "DNP", xlab = "TFQI4", col='red')
+
+logitgam2.3<-gam::gam(DNP ~ s(TT4RI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam2.3, se=T, ylab = "DNP", xlab = "TT4RI", col='red')
+
+logitgam2.4<-gam::gam(DNP ~ s(PTFQI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam2.4, se=T, ylab = "DNP", xlab = "PTFQI", col='red')
+```
+
+
+```{r fig.asp = 0.7, fig.width = 5}
+logitgam3.1<-gam::gam(DKD ~ s(TFQI3_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam3.1, se=T, ylab = "DKD", xlab = "TFQI3", col='red')
+
+logitgam3.2<-gam::gam(DKD ~ s(TFQI4_x, df = 3) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam3.2, se=T, ylab = "DKD", xlab = "TFQI4", col='red')
+
+logitgam3.3<-gam::gam(DKD ~ s(TT4RI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam3.3, se=T, ylab = "DKD", xlab = "TT4RI", col='red')
+
+logitgam3.4<-gam::gam(DKD ~ s(PTFQI_x, df = 2) ,data= dat.f4,family = binomial(link="logit"))
+plot(logitgam3.4, se=T, ylab = "DKD", xlab = "PTFQI", col='red')
+
+```
+
+# segmented regression
+# endpoint DKD
+
+```{r}
+# PTFQI
+# one
+DKD.PTFQI <- glm(DKD ~ PTFQI_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DKD.PTFQI %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s <-segmented.glm(DKD.PTFQI, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DKD.PTFQI.s)
+
+# cut off:
+DKD.PTFQI.s$psi[2]
+
+# LR ratio
+lrtest(DKD.PTFQI,DKD.PTFQI.s)
+
+# two 
+DKD.PTFQI.m <- glm(DKD ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c + sex,
+                 data = dat.f4,
+                 family = binomial(link = "logit"))
+
+DKD.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s.m <-segmented.glm(DKD.PTFQI.m, seg.Z = ~PTFQI_x)
+
+# estimate
+summary.seg(DKD.PTFQI.s.m)
+# cut off:
+DKD.PTFQI.s.m$psi
+
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DKD.TT4RI <- glm(DKD ~ TT4RI_x , data = dat.f4, family = binomial(link = "logit"))
+DKD.TT4RI %>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s <-segmented.glm(DKD.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s)
+# cut off:
+DKD.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DKD.TT4RI, DKD.TT4RI.s)
+
+# two 
+DKD.TT4RI.m <- glm(DKD ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DKD.TT4RI.m%>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s.m <-segmented.glm(DKD.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s.m )
+# cut off:
+DKD.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DKD.TFQI3 <- glm(DKD ~ TFQI3_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI3 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s <-segmented.glm(DKD.TFQI3, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s)
+ 
+# cut off:
+DKD.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3, DKD.TFQI3.s)
+
+# two 
+DKD.TFQI3.m <- glm(DKD ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s.m <-segmented.glm(DKD.TFQI3.m, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s.m)
+# cut off:
+DKD.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3.m, DKD.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DKD.TFQI4 <- glm(DKD ~ TFQI4_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI4 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s <-segmented.glm(DKD.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s)
+
+# cut off:
+DKD.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4, DKD.TFQI4.s)
+
+
+# two 
+DKD.TFQI4.m <- glm(DKD ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI4.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s.m <-segmented.glm(DKD.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s.m)
+# cut off:
+DKD.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4.m, DKD.TFQI4.s.m)
+```
+
+# endpoint DR
+
+```{r}
+# PTFQI
+# one
+DR.PTFQI <- glm(DR ~ PTFQI_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DR.PTFQI %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s <-segmented.glm(DR.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DR.PTFQI.s)
+# cut off:
+DR.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DR.PTFQI, DR.PTFQI.s)
+
+# two 
+DR.PTFQI.m <- glm(DR ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                 data = dat.f4,
+                 family = binomial(link = "logit"))
+
+DR.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s.m <-segmented.glm(DR.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DR.PTFQI.s.m)
+# cut off:
+DR.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DR.PTFQI.m, DR.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DR.TT4RI <- glm(DR ~ TT4RI_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DR.TT4RI %>% tbl_regression(exponentiate = T)
+
+DR.TT4RI.s <-segmented.glm(DR.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s)
+# cut off:
+DR.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DR.TT4RI, DR.TT4RI.s)
+
+# two 
+DR.TT4RI.m <- glm(DR ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+exp(coef(DR.TT4RI.m))
+
+DR.TT4RI.s.m <-segmented.glm(DR.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s.m)
+# cut off:
+DR.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DR.TT4RI.m, DR.TT4RI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DR.TFQI3 <- glm(DR ~ TFQI3_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DR.TFQI3  %>% tbl_regression(exponentiate = T)
+DR.TFQI3.s <-segmented.glm(DR.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.s)
+# cut off:
+DR.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI3, DR.TFQI3.s)
+
+
+# two 
+DR.TFQI3.m <- glm(DR ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DR.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DR.TFQI3.s.m <-segmented.glm(DR.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.m)
+# cut off:
+DR.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI3.m, DR.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DR.TFQI4 <- glm(DR ~ TFQI4_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DR.TFQI4 %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s <-segmented.glm(DR.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s)
+# cut off:
+DR.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI4, DR.TFQI4.s)
+
+
+# two 
+DR.TFQI4.m <- glm(DR ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DR.TFQI4.m %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s.m <-segmented.glm(DR.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s.m)
+# cut off:
+DR.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI4.m, DR.TFQI4.s.m)
+```
+
+# endpoint DNP
+
+```{r}
+# PTFQI
+# one
+DNP.PTFQI <- glm(DNP ~ PTFQI_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DNP.PTFQI %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s <-segmented.glm(DNP.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI, DNP.PTFQI.s)
+
+
+# two 
+DNP.PTFQI.m <- glm(DNP ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                 data = dat.f4,
+                 family = binomial(link = "logit"))
+
+DNP.PTFQI.m %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s.m <-segmented.glm(DNP.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI.m, DNP.PTFQI.s.m)
+
+```
+
+
+```{r}
+# TT4RI
+# one
+DNP.TT4RI <- glm(DNP ~ TT4RI_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DNP.TT4RI %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s <-segmented.glm(DNP.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s)
+# cut off:
+DNP.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI, DNP.TT4RI.s)
+
+# two 
+DNP.TT4RI.m <- glm(DNP ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DNP.TT4RI.m %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s.m <-segmented.glm(DNP.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s.m)
+# cut off:
+DNP.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI.m, DNP.TT4RI.s.m)
+
+```
+
+
+```{r}
+# TFQI3
+# one
+DNP.TFQI3 <- glm(DNP ~ TFQI3_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI3 %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s <-segmented.glm(DNP.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s)
+# cut off:
+DNP.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3, DNP.TFQI3.s)
+
+# two 
+DNP.TFQI3.m <- glm(DNP ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+
+DNP.TFQI3.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s.m <-segmented.glm(DNP.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s.m)
+# cut off:
+DNP.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3.m, DNP.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DNP.TFQI4 <- glm(DNP ~ TFQI4_x, data = dat.f4, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI4 %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s <-segmented.glm(DNP.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s)
+# cut off:
+DNP.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4, DNP.TFQI4.s)
+
+# two 
+DNP.TFQI4.m <- glm(DNP ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c + sex,
+                   data = dat.f4,
+                   family = binomial(link = "logit"))
+DNP.TFQI4.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s.m <-segmented.glm(DNP.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s.m)
+# cut off:
+DNP.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4.m, DNP.TFQI4.s.m)
+```
+
+# Male
+# endpoint DKD
+
+```{r}
+dat.f4.male <- dat.f4 %>% filter(sex == 1)
+```
+
+# endpoint DKD
+
+```{r}
+# PTFQI
+# one
+DKD.PTFQI <- glm(DKD ~ PTFQI_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DKD.PTFQI %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s <-segmented.glm(DKD.PTFQI, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DKD.PTFQI.s)
+
+# cut off:
+DKD.PTFQI.s$psi[2]
+
+# LR ratio
+lrtest(DKD.PTFQI,DKD.PTFQI.s)
+
+# two 
+DKD.PTFQI.m <- glm(DKD ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                 data = dat.f4.male,
+                 family = binomial(link = "logit"))
+
+DKD.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s.m <-segmented.glm(DKD.PTFQI.m, seg.Z = ~PTFQI_x)
+
+# estimate
+summary.seg(DKD.PTFQI.s.m)
+# cut off:
+DKD.PTFQI.s.m$psi
+
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DKD.TT4RI <- glm(DKD ~ TT4RI_x , data = dat.f4.male, family = binomial(link = "logit"))
+DKD.TT4RI %>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s <-segmented.glm(DKD.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s)
+# cut off:
+DKD.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DKD.TT4RI, DKD.TT4RI.s)
+
+# two 
+DKD.TT4RI.m <- glm(DKD ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DKD.TT4RI.m%>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s.m <-segmented.glm(DKD.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s.m )
+# cut off:
+DKD.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DKD.TFQI3 <- glm(DKD ~ TFQI3_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI3 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s <-segmented.glm(DKD.TFQI3, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s)
+ 
+# cut off:
+DKD.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3, DKD.TFQI3.s)
+
+# two 
+DKD.TFQI3.m <- glm(DKD ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s.m <-segmented.glm(DKD.TFQI3.m, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s.m)
+# cut off:
+DKD.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3.m, DKD.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DKD.TFQI4 <- glm(DKD ~ TFQI4_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI4 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s <-segmented.glm(DKD.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s)
+
+# cut off:
+DKD.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4, DKD.TFQI4.s)
+
+
+# two 
+DKD.TFQI4.m <- glm(DKD ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI4.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s.m <-segmented.glm(DKD.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s.m)
+# cut off:
+DKD.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4.m, DKD.TFQI4.s.m)
+```
+
+# endpoint DR
+
+```{r}
+# PTFQI
+# one
+DR.PTFQI <- glm(DR ~ PTFQI_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DR.PTFQI %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s <-segmented.glm(DR.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DR.PTFQI.s)
+# cut off:
+DR.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DR.PTFQI, DR.PTFQI.s)
+
+# two 
+DR.PTFQI.m <- glm(DR ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                 data = dat.f4.male,
+                 family = binomial(link = "logit"))
+
+DR.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s.m <-segmented.glm(DR.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DR.PTFQI.s.m)
+# cut off:
+DR.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DR.PTFQI.m, DR.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DR.TT4RI <- glm(DR ~ TT4RI_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DR.TT4RI %>% tbl_regression(exponentiate = T)
+
+DR.TT4RI.s <-segmented.glm(DR.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s)
+# cut off:
+DR.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DR.TT4RI, DR.TT4RI.s)
+
+# two 
+DR.TT4RI.m <- glm(DR ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+exp(coef(DR.TT4RI.m))
+
+DR.TT4RI.s.m <-segmented.glm(DR.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s.m)
+# cut off:
+DR.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DR.TT4RI.m, DR.TT4RI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DR.TFQI3 <- glm(DR ~ TFQI3_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DR.TFQI3  %>% tbl_regression(exponentiate = T)
+DR.TFQI3.s <-segmented.glm(DR.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.s)
+# cut off:
+DR.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI3, DR.TFQI3.s)
+
+
+# two 
+DR.TFQI3.m <- glm(DR ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DR.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DR.TFQI3.s.m <-segmented.glm(DR.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.m)
+# cut off:
+DR.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI3.m, DR.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DR.TFQI4 <- glm(DR ~ TFQI4_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DR.TFQI4 %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s <-segmented.glm(DR.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s)
+# cut off:
+DR.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI4, DR.TFQI4.s)
+
+
+# two 
+DR.TFQI4.m <- glm(DR ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DR.TFQI4.m %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s.m <-segmented.glm(DR.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s.m)
+# cut off:
+DR.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI4.m, DR.TFQI4.s.m)
+```
+
+# endpoint DNP
+
+```{r}
+# PTFQI
+# one
+DNP.PTFQI <- glm(DNP ~ PTFQI_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DNP.PTFQI %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s <-segmented.glm(DNP.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI, DNP.PTFQI.s)
+
+
+# two 
+DNP.PTFQI.m <- glm(DNP ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                 data = dat.f4.male,
+                 family = binomial(link = "logit"))
+
+DNP.PTFQI.m %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s.m <-segmented.glm(DNP.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI.m, DNP.PTFQI.s.m)
+
+```
+
+
+```{r}
+# TT4RI
+# one
+DNP.TT4RI <- glm(DNP ~ TT4RI_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DNP.TT4RI %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s <-segmented.glm(DNP.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s)
+# cut off:
+DNP.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI, DNP.TT4RI.s)
+
+# two 
+DNP.TT4RI.m <- glm(DNP ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DNP.TT4RI.m %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s.m <-segmented.glm(DNP.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s.m)
+# cut off:
+DNP.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI.m, DNP.TT4RI.s.m)
+
+```
+
+
+```{r}
+# TFQI3
+# one
+DNP.TFQI3 <- glm(DNP ~ TFQI3_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI3 %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s <-segmented.glm(DNP.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s)
+# cut off:
+DNP.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3, DNP.TFQI3.s)
+
+# two 
+DNP.TFQI3.m <- glm(DNP ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+
+DNP.TFQI3.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s.m <-segmented.glm(DNP.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s.m)
+# cut off:
+DNP.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3.m, DNP.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DNP.TFQI4 <- glm(DNP ~ TFQI4_x, data = dat.f4.male, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI4 %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s <-segmented.glm(DNP.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s)
+# cut off:
+DNP.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4, DNP.TFQI4.s)
+
+# two 
+DNP.TFQI4.m <- glm(DNP ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.male,
+                   family = binomial(link = "logit"))
+DNP.TFQI4.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s.m <-segmented.glm(DNP.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s.m)
+# cut off:
+DNP.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4.m, DNP.TFQI4.s.m)
+```
+
+# Female
+# endpoint DKD
+
+```{r}
+dat.f4.female <- dat.f4 %>% filter(sex == 0)
+```
+
+# endpoint DKD
+
+```{r}
+# PTFQI
+# one
+DKD.PTFQI <- glm(DKD ~ PTFQI_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DKD.PTFQI %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s <-segmented.glm(DKD.PTFQI, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DKD.PTFQI.s)
+
+# cut off:
+DKD.PTFQI.s$psi[2]
+
+# LR ratio
+lrtest(DKD.PTFQI,DKD.PTFQI.s)
+
+# two 
+DKD.PTFQI.m <- glm(DKD ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                 data = dat.f4.female,
+                 family = binomial(link = "logit"))
+
+DKD.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DKD.PTFQI.s.m <-segmented.glm(DKD.PTFQI.m, seg.Z = ~PTFQI_x)
+
+# estimate
+summary.seg(DKD.PTFQI.s.m)
+# cut off:
+DKD.PTFQI.s.m$psi
+
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DKD.TT4RI <- glm(DKD ~ TT4RI_x , data = dat.f4.female, family = binomial(link = "logit"))
+DKD.TT4RI %>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s <-segmented.glm(DKD.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s)
+# cut off:
+DKD.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DKD.TT4RI, DKD.TT4RI.s)
+
+# two 
+DKD.TT4RI.m <- glm(DKD ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DKD.TT4RI.m%>% tbl_regression(exponentiate = T)
+
+DKD.TT4RI.s.m <-segmented.glm(DKD.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DKD.TT4RI.s.m )
+# cut off:
+DKD.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DKD.PTFQI.m,DKD.PTFQI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DKD.TFQI3 <- glm(DKD ~ TFQI3_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI3 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s <-segmented.glm(DKD.TFQI3, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s)
+ 
+# cut off:
+DKD.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3, DKD.TFQI3.s)
+
+# two 
+DKD.TFQI3.m <- glm(DKD ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI3.s.m <-segmented.glm(DKD.TFQI3.m, seg.Z = ~TFQI3_x)
+
+# estimate
+summary.seg(DKD.TFQI3.s.m)
+# cut off:
+DKD.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI3.m, DKD.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DKD.TFQI4 <- glm(DKD ~ TFQI4_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DKD.TFQI4 %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s <-segmented.glm(DKD.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s)
+
+# cut off:
+DKD.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4, DKD.TFQI4.s)
+
+
+# two 
+DKD.TFQI4.m <- glm(DKD ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DKD.TFQI4.m %>% tbl_regression(exponentiate = T)
+
+DKD.TFQI4.s.m <-segmented.glm(DKD.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DKD.TFQI4.s.m)
+# cut off:
+DKD.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DKD.TFQI4.m, DKD.TFQI4.s.m)
+```
+
+# endpoint DR
+
+```{r}
+# PTFQI
+# one
+DR.PTFQI <- glm(DR ~ PTFQI_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DR.PTFQI %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s <-segmented.glm(DR.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DR.PTFQI.s)
+# cut off:
+DR.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DR.PTFQI, DR.PTFQI.s)
+
+# two 
+DR.PTFQI.m <- glm(DR ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                 data = dat.f4.female,
+                 family = binomial(link = "logit"))
+
+DR.PTFQI.m %>% tbl_regression(exponentiate = T)
+
+DR.PTFQI.s.m <-segmented.glm(DR.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DR.PTFQI.s.m)
+# cut off:
+DR.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DR.PTFQI.m, DR.PTFQI.s.m)
+```
+
+
+```{r}
+# TT4RI
+# one
+DR.TT4RI <- glm(DR ~ TT4RI_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DR.TT4RI %>% tbl_regression(exponentiate = T)
+
+DR.TT4RI.s <-segmented.glm(DR.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s)
+# cut off:
+DR.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DR.TT4RI, DR.TT4RI.s)
+
+# two 
+DR.TT4RI.m <- glm(DR ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+exp(coef(DR.TT4RI.m))
+
+DR.TT4RI.s.m <-segmented.glm(DR.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DR.TT4RI.s.m)
+# cut off:
+DR.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DR.TT4RI.m, DR.TT4RI.s.m)
+```
+
+
+```{r}
+# TFQI3
+# one
+DR.TFQI3 <- glm(DR ~ TFQI3_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DR.TFQI3  %>% tbl_regression(exponentiate = T)
+DR.TFQI3.s <-segmented.glm(DR.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.s)
+# cut off:
+DR.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI3, DR.TFQI3.s)
+
+
+# two 
+DR.TFQI3.m <- glm(DR ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DR.TFQI3.m %>% tbl_regression(exponentiate = T)
+
+DR.TFQI3.s.m <-segmented.glm(DR.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DR.TFQI3.m)
+# cut off:
+DR.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI3.m, DR.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DR.TFQI4 <- glm(DR ~ TFQI4_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DR.TFQI4 %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s <-segmented.glm(DR.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s)
+# cut off:
+DR.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DR.TFQI4, DR.TFQI4.s)
+
+
+# two 
+DR.TFQI4.m <- glm(DR ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DR.TFQI4.m %>% tbl_regression(exponentiate = T)
+DR.TFQI4.s.m <-segmented.glm(DR.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DR.TFQI4.s.m)
+# cut off:
+DR.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DR.TFQI4.m, DR.TFQI4.s.m)
+```
+
+# endpoint DNP
+
+```{r}
+# PTFQI
+# one
+DNP.PTFQI <- glm(DNP ~ PTFQI_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DNP.PTFQI %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s <-segmented.glm(DNP.PTFQI, seg.Z = ~PTFQI_x, psi = c(0.7))
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI, DNP.PTFQI.s)
+
+
+# two 
+DNP.PTFQI.m <- glm(DNP ~ PTFQI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                 data = dat.f4.female,
+                 family = binomial(link = "logit"))
+
+DNP.PTFQI.m %>% tbl_regression(exponentiate = T)
+DNP.PTFQI.s.m <-segmented.glm(DNP.PTFQI.m, seg.Z = ~PTFQI_x)
+# estimate
+summary.seg(DNP.PTFQI.s)
+# cut off:
+DNP.PTFQI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.PTFQI.m, DNP.PTFQI.s.m)
+
+```
+
+
+```{r}
+# TT4RI
+# one
+DNP.TT4RI <- glm(DNP ~ TT4RI_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DNP.TT4RI %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s <-segmented.glm(DNP.TT4RI, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s)
+# cut off:
+DNP.TT4RI.s$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI, DNP.TT4RI.s)
+
+# two 
+DNP.TT4RI.m <- glm(DNP ~ TT4RI_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L + diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DNP.TT4RI.m %>% tbl_regression(exponentiate = T)
+DNP.TT4RI.s.m <-segmented.glm(DNP.TT4RI.m, seg.Z = ~TT4RI_x)
+# estimate
+summary.seg(DNP.TT4RI.s.m)
+# cut off:
+DNP.TT4RI.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TT4RI.m, DNP.TT4RI.s.m)
+
+```
+
+
+```{r}
+# TFQI3
+# one
+DNP.TFQI3 <- glm(DNP ~ TFQI3_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI3 %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s <-segmented.glm(DNP.TFQI3, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s)
+# cut off:
+DNP.TFQI3.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3, DNP.TFQI3.s)
+
+# two 
+DNP.TFQI3.m <- glm(DNP ~ TFQI3_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+
+DNP.TFQI3.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI3.s.m <-segmented.glm(DNP.TFQI3.m, seg.Z = ~TFQI3_x)
+# estimate
+summary.seg(DNP.TFQI3.s.m)
+# cut off:
+DNP.TFQI3.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI3.m, DNP.TFQI3.s.m)
+```
+
+
+```{r}
+# TFQI4
+# one
+DNP.TFQI4 <- glm(DNP ~ TFQI4_x, data = dat.f4.female, family = binomial(link = "logit"))
+# estimate
+DNP.TFQI4 %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s <-segmented.glm(DNP.TFQI4, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s)
+# cut off:
+DNP.TFQI4.s$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4, DNP.TFQI4.s)
+
+# two 
+DNP.TFQI4.m <- glm(DNP ~ TFQI4_x + Age + BMI  + LDL + FT4.Pmol.L + FT3.Pmol.L+ diabetes.duration + HbA1c,
+                   data = dat.f4.female,
+                   family = binomial(link = "logit"))
+DNP.TFQI4.m %>% tbl_regression(exponentiate = T)
+DNP.TFQI4.s.m <-segmented.glm(DNP.TFQI4.m, seg.Z = ~TFQI4_x)
+# estimate
+summary.seg(DNP.TFQI4.s.m)
+# cut off:
+DNP.TFQI4.s.m$psi[2]
+# LR ratio
+lrtest(DNP.TFQI4.m, DNP.TFQI4.s.m)
+```
